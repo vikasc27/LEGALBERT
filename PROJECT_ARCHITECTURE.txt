@@ -1,0 +1,298 @@
+LEGALBERT SECURE DOCUMENT SUMMARIZER
+=====================================
+
+1. PROJECT OVERVIEW
+-------------------
+This project is a LegalBERT-based legal document summarizer protected by:
+
+- bcrypt password hashing
+- Server-side authenticated sessions
+- Role-Based Access Control (RBAC)
+- Secure PDF upload validation
+- Private document storage
+- Security audit logging
+- Role-specific Gradio dashboards
+
+The original LegalBERT classification and summarization workflow is preserved in
+summarizer.py. Security checks are performed before protected document operations
+are executed.
+
+
+2. PROJECT ARCHITECTURE
+-----------------------
+
+LEGALBERT/
+|
+|-- app.py
+|   Main Gradio application and protected callback functions.
+|
+|-- authentication.py
+|   User accounts, bcrypt password verification, sessions, login, logout,
+|   and Admin user management.
+|
+|-- authorization.py
+|   Central Permission definitions, role-permission mappings, and permission
+|   checking functions.
+|
+|-- audit.py
+|   SecurityAudit logging implementation using Python logging.
+|   Writes events to security.log.
+|
+|-- storage.py
+|   In-memory document metadata store and application-owned document file
+|   storage under the data/ directory.
+|
+|-- summarizer.py
+|   Existing LegalBERT summarization functionality, including PDF extraction,
+|   sentence splitting, classification, deduplication, fallback rules, and
+|   structured FACTS, ISSUE, ARGUMENT, and ANALYSIS output.
+|
+|-- test_security.py
+|   Automated tests for login, invalid passwords, RBAC restrictions,
+|   Admin-only user management, and logout behavior.
+|
+|-- requirements.txt
+|   Python package dependencies.
+|
+|-- PROJECT_ARCHITECTURE.txt
+|   This architecture and implementation document.
+|
+|-- model/ OR configured model directory
+|   Existing trained LegalBERT files. This directory is not included in the
+|   source project and must be configured with LEGALBERT_MODEL_PATH.
+|
+|-- data/
+|   Runtime directory created automatically for private uploaded documents.
+|
+|-- security.log
+|   Runtime audit log created automatically when security events occur.
+|
+
+
+3. APPLICATION REQUEST FLOW
+---------------------------
+
+A. Application startup
+   1. app.py creates SecurityAudit, Authenticator, DocumentStore, and
+      LegalSummarizer instances.
+   2. LegalSummarizer attempts to load the trained LegalBERT model from
+      LEGALBERT_MODEL_PATH or the default model directory.
+   3. If the trained model is unavailable, the rule-based fallback classifier
+      is used.
+   4. The Gradio interface is created and launched.
+
+B. Login
+   1. The user submits a username and password.
+   2. Authenticator looks up the user by normalized username.
+   3. bcrypt verifies the submitted password against the stored password hash.
+   4. A server-side session maps the Gradio session ID to the authenticated user.
+   5. The role-specific dashboard is displayed.
+   6. Successful and failed login attempts are recorded in security.log.
+
+C. Protected operation
+   1. The callback receives the Gradio request and obtains its session ID.
+   2. The session ID is resolved on the server to the authenticated User object.
+   3. authorization.has_permission() checks the User object's server-side role.
+   4. Unauthorized requests are rejected and logged.
+   5. Authorized requests continue to file validation, storage, or summarization.
+
+D. PDF summarization
+   1. The backend verifies upload permission.
+   2. The backend verifies summary-generation permission.
+   3. The file extension, existence, size, and PDF signature are validated.
+   4. The upload is copied into application-owned data storage.
+   5. pdfplumber extracts the PDF text.
+   6. LegalBERT classifies legal sentences when the model is available.
+   7. The existing rule-based classifier is used as a fallback when needed.
+   8. Duplicate and similar sentences are removed.
+   9. A structured summary is generated for the four legal categories.
+   10. Upload and summary-generation events are logged.
+
+
+4. ROLE AND PERMISSION MATRIX
+-----------------------------
+
+Permission                         Admin       Lawyer      Viewer
+-----------------------------------------------------------------
+Upload documents                   YES         YES         NO
+Generate summaries                 YES         YES         NO
+View authorized documents          YES         YES         YES
+Delete documents                   YES         NO          NO
+Manage user accounts               YES         NO          NO
+View security audit logs           YES         NO          NO
+
+Document visibility:
+- Admin can view all stored documents.
+- Lawyer can view documents uploaded by that lawyer account.
+- Viewer can view documents available to that viewer account.
+
+The interface hides unavailable controls, but backend permission checks are the
+actual security boundary. A client cannot gain permission by changing the UI.
+
+
+5. AUTHENTICATION DESIGN
+------------------------
+
+Demo accounts are created at application startup:
+
+Username: admin
+Password: Admin@123
+Role: Admin
+
+Username: lawyer
+Password: Lawyer@123
+Role: Lawyer
+
+Username: viewer
+Password: Viewer@123
+Role: Viewer
+
+Passwords are hashed with bcrypt and are never stored as plain text.
+Sessions store only a server-side session-to-username mapping. Roles are not
+accepted from the client during protected operations.
+
+Current user accounts and sessions are held in memory. They are reset when the
+application restarts.
+
+
+6. SECURITY AUDIT LOGGING
+-------------------------
+
+Audit events are written to security.log in this format:
+
+TIMESTAMP | username=USERNAME | action=ACTION | status=STATUS
+
+Recorded actions include:
+
+- login SUCCESS
+- login FAILED
+- logout SUCCESS
+- document_upload SUCCESS or FAILED
+- summary_generation SUCCESS or FAILED
+- document_deletion SUCCESS or FAILED
+- user_management SUCCESS or ACCESS DENIED
+- user_listing ACCESS DENIED or successful access
+- audit_log_view ACCESS DENIED or successful access
+- document_view ACCESS DENIED
+
+Passwords, session tokens, and document contents are not written to the audit
+log. Only Admin users can read the audit log through the application interface.
+
+Example:
+
+2026-10-04 12:00:00,000 | username=admin | action=login | status=SUCCESS
+2026-10-04 12:01:00,000 | username=viewer | action=login | status=SUCCESS
+2026-10-04 12:01:05,000 | username=viewer | action=summary_generation | status=ACCESS DENIED
+2026-10-04 12:02:00,000 | username=lawyer | action=document_upload | status=SUCCESS
+
+
+7. SECURE PDF UPLOAD CONTROLS
+-----------------------------
+
+The backend validates every upload before processing:
+
+- Only the .pdf extension is accepted.
+- The path must refer to an existing regular file.
+- The file size must not exceed 20 MB.
+- The first five bytes must contain the PDF signature: %PDF-.
+- The file is copied into application-owned data storage.
+- The original user-supplied filename is reduced to its basename before storage.
+- Unauthorized users are rejected before file validation and processing.
+
+
+8. INSTALLATION
+---------------
+
+From the project directory, run:
+
+    pip install -r requirements.txt
+
+Set the path to the existing trained model. PowerShell example:
+
+    $env:LEGALBERT_MODEL_PATH="C:\path\to\output_preds"
+
+The configured model directory should contain the trained LegalBERT files,
+including config.json and the model/tokenizer files required by Transformers.
+
+
+9. RUNNING THE APPLICATION
+--------------------------
+
+Run:
+
+    python app.py
+
+Open the local Gradio address shown by the terminal. The default address is:
+
+    http://127.0.0.1:7860
+
+
+10. ROLE TEST PLAN
+------------------
+
+Admin:
+- Log in as admin.
+- Upload a PDF and generate a summary.
+- View documents.
+- Delete a document.
+- Create or remove users.
+- View the security audit log.
+
+Lawyer:
+- Log in as lawyer.
+- Upload a PDF and generate a summary.
+- View authorized documents and summaries.
+- Confirm that user management, audit logs, and document deletion are denied.
+
+Viewer:
+- Log in as viewer.
+- View authorized summaries.
+- Confirm that upload, summary generation, deletion, user management, and
+  administrative audit-log access are denied.
+
+Unauthenticated user:
+- Attempt to use protected callbacks without logging in.
+- Confirm that the request is denied and recorded as ACCESS DENIED.
+
+Automated security tests:
+
+    python -m pytest -q test_security.py
+
+Syntax validation:
+
+    python -m compileall -q app.py authentication.py authorization.py audit.py storage.py summarizer.py
+
+
+11. IMPLEMENTED SECURITY FEATURES
+---------------------------------
+
+- Secure bcrypt password hashing
+- Failed-login handling
+- Server-side sessions
+- Logout and session invalidation
+- Centralized permission checking
+- Least-privilege role definitions
+- Backend authorization before protected operations
+- Unauthorized-operation audit logging
+- Admin-only user management
+- Admin-only audit-log viewing
+- PDF extension, size, existence, and signature checks
+- Safe filename handling
+- Private application-owned document copies
+- No password or document-content logging
+
+
+12. LIMITATIONS AND PRODUCTION CONSIDERATIONS
+---------------------------------------------
+
+- Users, sessions, and document metadata are currently stored in memory.
+  Restarting the application clears them.
+- The data directory is local filesystem storage and should use strict operating
+  system permissions in production.
+- The default demo passwords must be replaced before deployment.
+- A production deployment should use a persistent database for users, sessions,
+  and document metadata.
+- A production deployment should use secure HTTPS, CSRF protection, rate
+  limiting, account lockout or throttling, and a managed secret/session store.
+- The LegalBERT model files must be supplied separately and are not committed
+  to this project.
